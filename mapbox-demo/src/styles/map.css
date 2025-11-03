@@ -152,6 +152,24 @@
   color: #1f2937;
 }
 
+/* Custom Marker Styles */
+.mapboxgl-marker {
+  cursor: pointer;
+  transition: transform 0.2s ease;
+}
+
+.mapboxgl-marker:hover {
+  transform: scale(1.1);
+  z-index: 1000;
+}
+
+/* Cluster styling enhancements */
+.mapboxgl-canvas-container canvas {
+  /* Smooth rendering for better marker appearance */
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .map-section {

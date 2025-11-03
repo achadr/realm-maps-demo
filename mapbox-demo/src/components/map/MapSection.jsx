@@ -10,6 +10,28 @@ import '../../styles/controls.css';
 // Set Mapbox token globally
 mapboxgl.accessToken = config.mapbox.token;
 
+// Category icon mapping
+const CATEGORY_ICONS = {
+  'Amphibians': 'https://api.questagame.com/images/uploads/category/24/thumb_1-amphibian.jpeg',
+  'Arachnids': 'https://api.questagame.com/images/uploads/category/18/thumb_4-spider.jpg',
+  'Birds': 'https://api.questagame.com/images/uploads/category/17/thumb_0-bird.jpg',
+  'Crustaceans': 'https://api.questagame.com/images/uploads/category/22/thumb_10-lobster.png',
+  'Fish': 'https://api.questagame.com/images/uploads/category/31/thumb_14-fish.png',
+  'Fungi and Friends': 'https://api.questagame.com/images/uploads/category/27/thumb_5-fungi.jpg',
+  'Insects - Ants, Bees and Wasps': 'https://api.questagame.com/images/uploads/category/35/thumb_ant.png',
+  'Insects - Beetles': 'https://api.questagame.com/images/uploads/category/34/thumb_imgres.png',
+  'Insects - Butterflies and Moths': 'https://api.questagame.com/images/uploads/category/26/thumb_images.png',
+  'Insects - Flies': 'https://api.questagame.com/images/uploads/category/36/thumb_flies.png',
+  'Mammals': 'https://api.questagame.com/images/uploads/category/23/thumb_3-mammal.png',
+  'Other Arthropods': 'https://api.questagame.com/images/uploads/category/19/thumb_7-centipede.jpg',
+  'Other Insects': 'https://api.questagame.com/images/uploads/category/20/thumb_8-hopping_insect.png',
+  'Other Invertebrates': 'https://api.questagame.com/images/uploads/category/21/thumb_12-gastropods.jpg',
+  'Other Life': 'https://api.questagame.com/images/uploads/category/37/thumb_unnamed.jpg',
+  'Plants that do not flower': 'https://api.questagame.com/images/uploads/category/28/thumb_6-fern.jpg',
+  'Plants that flower': 'https://api.questagame.com/images/uploads/category/29/thumb_13-floweringplant.png',
+  'Reptiles': 'https://api.questagame.com/images/uploads/category/25/thumb_2-reptile.jpg',
+};
+
 /**
  * MapSection - Embedded map component (section-based, not fullscreen)
  * @param {number} realmId - ID of the realm to display
@@ -234,8 +256,130 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
     }
   };
 
+  // Function to load image and convert to base64
+  const loadImageAsBase64 = (url) => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        try {
+          const base64 = canvas.toDataURL('image/png');
+          resolve(base64);
+        } catch (e) {
+          reject(e);
+        }
+      };
+      img.onerror = reject;
+      img.src = url;
+    });
+  };
+
+  // Function to create teardrop SVG marker with embedded image
+  const createTearDropMarkerSVG = (imageBase64, category, size = 60) => {
+    // Generate unique IDs for this marker's definitions
+    const uniqueId = category.toLowerCase().replace(/\s+/g, '-');
+    return `
+      <svg width="${size}" height="${size * 1.2}" viewBox="0 0 50 60" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <filter id="shadow-${uniqueId}" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur in="SourceAlpha" stdDeviation="2"/>
+            <feOffset dx="0" dy="2" result="offsetblur"/>
+            <feComponentTransfer>
+              <feFuncA type="linear" slope="0.3"/>
+            </feComponentTransfer>
+            <feMerge>
+              <feMergeNode/>
+              <feMergeNode in="SourceGraphic"/>
+            </feMerge>
+          </filter>
+          <clipPath id="circle-clip-${uniqueId}">
+            <circle cx="25" cy="20" r="15"/>
+          </clipPath>
+          <linearGradient id="pin-gradient-${uniqueId}" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" style="stop-color:#ffffff;stop-opacity:0.3" />
+            <stop offset="100%" style="stop-color:#000000;stop-opacity:0.1" />
+          </linearGradient>
+        </defs>
+
+        <!-- Drop shadow -->
+        <ellipse cx="25" cy="56" rx="8" ry="3" fill="black" opacity="0.3"/>
+
+        <!-- Teardrop shape with gradient -->
+        <path d="M25,2 C15,2 8,9 8,19 C8,29 25,50 25,50 C25,50 42,29 42,19 C42,9 35,2 25,2 Z"
+              fill="#ef4444"
+              stroke="white"
+              stroke-width="2.5"
+              filter="url(#shadow-${uniqueId})"/>
+
+        <!-- Inner white border -->
+        <circle cx="25" cy="20" r="16" fill="white"/>
+
+        <!-- Category image clipped to circle -->
+        <image href="${imageBase64}"
+               x="10" y="5"
+               width="30" height="30"
+               clip-path="url(#circle-clip-${uniqueId})"
+               preserveAspectRatio="xMidYMid slice"/>
+
+        <!-- Glossy overlay effect -->
+        <circle cx="25" cy="20" r="15" fill="url(#pin-gradient-${uniqueId})" opacity="0.4"/>
+
+        <!-- Outer circle border -->
+        <circle cx="25" cy="20" r="15" fill="none" stroke="#e5e7eb" stroke-width="1" opacity="0.8"/>
+      </svg>
+    `;
+  };
+
+  // Function to load category images as custom teardrop markers
+  const loadCategoryIcons = async (map) => {
+    const loadPromises = Object.entries(CATEGORY_ICONS).map(([category, url]) => {
+      return new Promise(async (resolve) => {
+        const iconName = `category-${category.toLowerCase().replace(/\s+/g, '-')}`;
+
+        // Check if already loaded
+        if (map.hasImage(iconName)) {
+          resolve();
+          return;
+        }
+
+        try {
+          // Load the category image as base64
+          const imageBase64 = await loadImageAsBase64(url);
+
+          // Create teardrop marker SVG with the base64 image
+          const svg = createTearDropMarkerSVG(imageBase64, category);
+          const img = new Image(50, 60);
+
+          img.onload = () => {
+            if (!map.hasImage(iconName)) {
+              map.addImage(iconName, img, { sdf: false });
+            }
+            resolve();
+          };
+
+          img.onerror = (error) => {
+            console.warn(`Failed to load marker for ${category}:`, error);
+            resolve();
+          };
+
+          img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+        } catch (error) {
+          console.warn(`Failed to process image for ${category}:`, error);
+          resolve();
+        }
+      });
+    });
+
+    await Promise.all(loadPromises);
+  };
+
   // Function to add observation markers with clustering
-  const addObservationMarkers = (map, observations) => {
+  const addObservationMarkers = async (map, observations) => {
     // Remove existing source and layers if they exist
     if (map.getSource('observations')) {
       if (map.getLayer('clusters')) map.removeLayer('clusters');
@@ -243,6 +387,9 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
       if (map.getLayer('unclustered-point')) map.removeLayer('unclustered-point');
       map.removeSource('observations');
     }
+
+    // Load category icons first
+    await loadCategoryIcons(map);
 
     // Create GeoJSON from observations
     const geojson = {
@@ -261,6 +408,7 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
           creatorName: obs.creator_name || 'Unknown',
           imageUrl: obs.images?.[0]?.url || null,
           imageThumbnail: obs.images?.[0]?.url_thumbnail || null,
+          iconName: `category-${(obs.category || 'Other').toLowerCase().replace(/\s+/g, '-')}`
         }
       }))
     };
@@ -277,7 +425,7 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
     // Determine the beforeId - insert markers before 3D buildings layer
     const beforeId = map.getLayer('3d-buildings') ? '3d-buildings' : undefined;
 
-    // Add cluster circles (blue)
+    // Add cluster circles with gradient effect
     map.addLayer({
       id: 'clusters',
       type: 'circle',
@@ -287,21 +435,25 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
         'circle-color': [
           'step',
           ['get', 'point_count'],
-          '#3b82f6',  // Blue for small clusters
+          '#22c55e',  // Green for small clusters
           10,
-          '#2563eb', // Darker blue for medium
+          '#3b82f6', // Blue for medium
           30,
-          '#1e40af'  // Darkest blue for large
+          '#a855f7'  // Purple for large
         ],
         'circle-radius': [
           'step',
           ['get', 'point_count'],
-          20,   // Small clusters
+          22,   // Small clusters
           10,
-          30,   // Medium clusters
+          32,   // Medium clusters
           30,
-          40    // Large clusters
-        ]
+          42    // Large clusters
+        ],
+        'circle-opacity': 0.9,
+        'circle-stroke-width': 3,
+        'circle-stroke-color': '#ffffff',
+        'circle-stroke-opacity': 0.8
       }
     }, beforeId);
 
@@ -314,24 +466,30 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
       layout: {
         'text-field': '{point_count_abbreviated}',
         'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Bold'],
-        'text-size': 12
+        'text-size': 14
       },
       paint: {
-        'text-color': '#ffffff'
+        'text-color': '#ffffff',
+        'text-halo-color': 'rgba(0, 0, 0, 0.3)',
+        'text-halo-width': 1
       }
     }, beforeId);
 
-    // Add individual markers (red)
+    // Add individual teardrop markers with custom category icons
     map.addLayer({
       id: 'unclustered-point',
-      type: 'circle',
+      type: 'symbol',
       source: 'observations',
       filter: ['!', ['has', 'point_count']],
+      layout: {
+        'icon-image': ['get', 'iconName'],
+        'icon-size': 0.8,
+        'icon-allow-overlap': false,
+        'icon-anchor': 'bottom',
+        'icon-offset': [0, -5]
+      },
       paint: {
-        'circle-color': '#ef4444',  // Red for individual markers
-        'circle-radius': 8,
-        'circle-stroke-width': 2,
-        'circle-stroke-color': '#ffffff'
+        'icon-opacity': 1
       }
     }, beforeId);
 
