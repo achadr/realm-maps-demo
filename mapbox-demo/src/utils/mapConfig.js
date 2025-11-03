@@ -3,6 +3,7 @@
  */
 
 export const MAP_STYLES = {
+  STANDARD: 'mapbox://styles/mapbox/standard',
   SATELLITE: 'mapbox://styles/mapbox/satellite-v9',
   SATELLITE_STREETS: 'mapbox://styles/mapbox/satellite-streets-v12',
   STREETS: 'mapbox://styles/mapbox/streets-v12',
@@ -15,10 +16,17 @@ export const MAP_STYLES = {
  * Map style metadata for UI display
  */
 export const MAP_STYLE_INFO = {
+  STANDARD: {
+    name: 'Standard (Realistic)',
+    description: 'Modern style with photorealistic 3D buildings',
+    supports3D: true,
+    hasBuiltIn3D: true, // Standard has built-in 3D buildings
+    icon: '🏢',
+  },
   SATELLITE_STREETS: {
-    name: 'Satellite',
-    description: 'Satellite imagery with street labels',
-    supports3D: false,
+    name: 'Satellite 3D',
+    description: 'Satellite imagery with 3D buildings',
+    supports3D: true,
     icon: '🛰️',
   },
   STREETS: {
@@ -28,9 +36,9 @@ export const MAP_STYLE_INFO = {
     icon: '🏙️',
   },
   OUTDOORS: {
-    name: 'Outdoors',
-    description: 'Topographic outdoor map',
-    supports3D: false,
+    name: 'Outdoors 3D',
+    description: 'Topographic map with 3D buildings',
+    supports3D: true,
     icon: '🏔️',
   },
   DARK: {
@@ -40,9 +48,9 @@ export const MAP_STYLE_INFO = {
     icon: '🌙',
   },
   LIGHT: {
-    name: 'Light',
-    description: 'Clean light theme',
-    supports3D: false,
+    name: 'Light 3D',
+    description: 'Light theme with 3D buildings',
+    supports3D: true,
     icon: '☀️',
   },
 };
@@ -59,7 +67,7 @@ export const DEFAULT_MAP_CONFIG = {
 
 /**
  * 3D Building Layer Configuration
- * This layer adds building extrusions to compatible map styles
+ * Realistic building extrusions with proper lighting and materials
  */
 export const BUILDING_3D_LAYER = {
   id: '3d-buildings',
@@ -69,30 +77,48 @@ export const BUILDING_3D_LAYER = {
   type: 'fill-extrusion',
   minzoom: 14,
   paint: {
+    // Realistic building colors with varied tones based on height
     'fill-extrusion-color': [
-      'interpolate',
-      ['linear'],
-      ['get', 'height'],
-      0, '#aaaaaa',
-      50, '#999999',
-      100, '#888888',
-      200, '#777777',
+      'case',
+      // Taller buildings (100m+) - darker, modern glass
+      ['>=', ['get', 'height'], 100],
+      '#6b7280',
+      // Mid-height buildings (50-100m) - concrete/stone
+      ['>=', ['get', 'height'], 50],
+      '#9ca3af',
+      // Low-rise buildings (20-50m) - residential/commercial
+      ['>=', ['get', 'height'], 20],
+      '#d1d5db',
+      // Small buildings (<20m) - lighter tone
+      '#e5e7eb'
     ],
+
+    // Building height with smooth transition
     'fill-extrusion-height': [
       'interpolate',
       ['linear'],
       ['zoom'],
       14, 0,
-      14.5, ['get', 'height'],
+      14.05, ['get', 'height']
     ],
+
+    // Building base (for buildings on platforms)
     'fill-extrusion-base': [
       'interpolate',
       ['linear'],
       ['zoom'],
       14, 0,
-      14.5, ['get', 'min_height'],
+      14.05, ['get', 'min_height']
     ],
-    'fill-extrusion-opacity': 0.8,
+
+    // Full opacity for solid appearance
+    'fill-extrusion-opacity': 1,
+
+    // Ambient occlusion for depth and shadows
+    'fill-extrusion-ambient-occlusion-intensity': 0.5,
+
+    // Realistic lighting from above
+    'fill-extrusion-vertical-gradient': true,
   },
 };
 

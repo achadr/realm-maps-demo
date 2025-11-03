@@ -19,6 +19,7 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const [mapLoaded, setMapLoaded] = useState(false);
+  const [styleLoaded, setStyleLoaded] = useState(false);
   const [currentStyle, setCurrentStyle] = useState(initialStyle);
   const isInitialMount = useRef(true);
 
@@ -31,8 +32,8 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
       return;
     }
 
-    // Initialize map
-    const map = new mapboxgl.Map({
+    // Create a map instance
+    const mapInstance = new mapboxgl.Map({
       container: mapContainerRef.current,
       ...DEFAULT_MAP_CONFIG,
       style: currentStyle,
@@ -40,79 +41,102 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
       zoom: 15,
     });
 
-    mapRef.current = map;
+    mapRef.current = mapInstance;
 
-    // Wait for map to load
-    map.on('load', () => {
-      console.log('✅ Map loaded successfully with style:', currentStyle);
+    mapInstance.once('load', () => {
+      console.log('✅ Map loaded successfully');
 
-      // Add built-in controls
+      // Add controls
       const navControl = new mapboxgl.NavigationControl({
         showCompass: true,
         showZoom: true,
-        visualizePitch: true, // Enable for 3D view
+        visualizePitch: true,
       });
-      map.addControl(navControl, 'top-right');
+      mapInstance.addControl(navControl, 'top-right');
 
       const fullscreenControl = new mapboxgl.FullscreenControl();
-      map.addControl(fullscreenControl, 'top-right');
+      mapInstance.addControl(fullscreenControl, 'top-right');
 
-      // Add style switcher
       const styleSwitcher = new StyleSwitcherControl(
         MAP_STYLES,
         MAP_STYLE_INFO,
         (newStyleUrl) => setCurrentStyle(newStyleUrl)
       );
-      map.addControl(styleSwitcher, 'top-left');
-
-      // Add 3D buildings layer if style supports it
-      if (supports3DBuildings(currentStyle)) {
-        add3DBuildingsLayer(map);
-      }
+      mapInstance.addControl(styleSwitcher, 'top-left');
 
       setMapLoaded(true);
+
+      // Add 3D buildings after a small delay to ensure composite source is ready
+      setTimeout(() => {
+        if (supports3DBuildings(currentStyle)) {
+          add3DBuildingsLayer(mapInstance);
+        }
+        setStyleLoaded(true);
+      }, 500);
     });
 
-    map.on('error', (e) => {
+    mapInstance.on('error', (e) => {
       console.error('❌ Map error:', e);
     });
 
-    // Cleanup on unmount
+    // Cleanup
     return () => {
-      map.remove();
+      mapInstance.remove();
       mapRef.current = null;
     };
   }, []); // Only run once on mount
 
   // Update map when data is loaded
   useEffect(() => {
-    if (!mapRef.current || !mapLoaded || !center || !bounds || observations.length === 0) {
+    console.log('📊 Data effect triggered:', {
+      hasMap: !!mapRef.current,
+      mapLoaded,
+      styleLoaded,
+      observationsCount: observations.length,
+      hasCenter: !!center,
+      hasBounds: !!bounds
+    });
+
+    if (!mapRef.current) {
+      console.log('⏭️ Skipping: No map ref');
+      return;
+    }
+
+    if (!mapLoaded || !styleLoaded) {
+      console.log('⏭️ Skipping: Map or style not loaded yet');
+      return;
+    }
+
+    if (observations.length === 0) {
+      console.log('⏭️ Skipping: No observations yet');
       return;
     }
 
     const map = mapRef.current;
 
+    console.log('🔄 Adding markers for', observations.length, 'observations');
+
     // Add observation markers with clustering
     addObservationMarkers(map, observations);
 
-    // Fit map to bounds with padding
-    if (bounds) {
+    // Fit map to bounds with padding (only if we have bounds)
+    if (bounds && center) {
       map.fitBounds(bounds, {
         padding: 50,
         maxZoom: 16,
         duration: 1000,
       });
-    } else {
+      console.log('✅ Map centered on realm:', center);
+    } else if (center) {
       // Fallback to center
       map.flyTo({
         center: [center.lng, center.lat],
         zoom: 15,
         duration: 1000,
       });
+      console.log('✅ Map centered on point:', center);
     }
-
-    console.log('✅ Map centered on realm:', center);
-  }, [mapLoaded, center, bounds, observations]);
+  }, [mapLoaded, styleLoaded, center, bounds, observations]);
 
   // Handle style changes
   useEffect(() => {
@@ -125,52 +149,86 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
     if (!mapRef.current || !mapLoaded) return;
 
     const map = mapRef.current;
+    setStyleLoaded(false);
+
+    // Save current camera position before style change
+    const currentCenter = map.getCenter();
+    const currentZoom = map.getZoom();
+    const currentPitch = map.getPitch();
+    const currentBearing = map.getBearing();
+
+    console.log('💾 Saving camera position:', {
+      center: currentCenter,
+      zoom: currentZoom,
+      pitch: currentPitch,
+      bearing: currentBearing
+    });
 
     // Change map style
     map.setStyle(currentStyle);
 
-    // Wait for style to load, then re-add 3D buildings and markers
+    // Wait for style to load
     map.once('style.load', () => {
-      console.log('✅ Style changed to:', currentStyle);
+      console.log('✅ New style loaded, restoring camera');
 
-      if (supports3DBuildings(currentStyle)) {
-        add3DBuildingsLayer(map);
-      }
+      // Restore camera position
+      map.jumpTo({
+        center: currentCenter,
+        zoom: currentZoom,
+        pitch: currentPitch,
+        bearing: currentBearing
+      });
 
-      // Re-add markers after style change
-      if (observations.length > 0) {
-        addObservationMarkers(map, observations);
-      }
+      // Add 3D buildings and markers with delay to ensure composite source is ready
+      setTimeout(() => {
+        if (supports3DBuildings(currentStyle)) {
+          add3DBuildingsLayer(map);
+        }
 
-      // Re-center on data after style change
-      if (bounds) {
-        map.fitBounds(bounds, {
-          padding: 50,
-          maxZoom: 16,
-          duration: 1000,
-        });
-      }
+        // Re-add markers
+        if (observations.length > 0) {
+          addObservationMarkers(map, observations);
+        }
+
+        setStyleLoaded(true);
+      }, 500);
     });
-  }, [currentStyle, mapLoaded, bounds, observations]);
+  }, [currentStyle, mapLoaded, observations]);
 
   // Function to add 3D buildings layer
   const add3DBuildingsLayer = (map) => {
-    // Check if layer already exists
-    if (map.getLayer('3d-buildings')) {
+    // Check if current style has built-in 3D buildings (e.g., Standard style)
+    const styleKey = Object.keys(MAP_STYLES).find(
+      key => MAP_STYLES[key] === currentStyle
+    );
+    if (styleKey && MAP_STYLE_INFO[styleKey]?.hasBuiltIn3D) {
+      console.log('✅ Style has built-in 3D buildings, skipping custom layer');
       return;
     }
 
-    // Check if the required source exists
+    // Check if layer already exists
+    if (map.getLayer('3d-buildings')) {
+      console.log('✅ 3D buildings layer already exists');
+      return;
+    }
+
+    // Check composite source - but with a more robust check
     const source = map.getSource('composite');
     if (!source) {
-      console.warn('⚠️ Composite source not available for 3D buildings');
+      console.warn('⚠️ Composite source not available, will retry');
+      // Schedule a retry - composite may not be ready yet
+      setTimeout(() => {
+        if (map.getSource('composite')) {
+          add3DBuildingsLayer(map);
+        }
+      }, 100);
       return;
     }
 
     try {
       // Add the 3D buildings layer
       map.addLayer(BUILDING_3D_LAYER);
-      console.log('✅ 3D buildings layer added');
+      console.log('✅ 3D buildings layer added successfully');
     } catch (err) {
       console.error('❌ Error adding 3D buildings layer:', err);
     }
@@ -216,6 +274,9 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
       clusterRadius: 50
     });
 
+    // Determine the beforeId - insert markers before 3D buildings layer
+    const beforeId = map.getLayer('3d-buildings') ? '3d-buildings' : undefined;
+
     // Add cluster circles (blue)
     map.addLayer({
       id: 'clusters',
@@ -242,7 +303,7 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
           40    // Large clusters
         ]
       }
-    });
+    }, beforeId);
 
     // Add cluster count labels
     map.addLayer({
@@ -258,7 +319,7 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
       paint: {
         'text-color': '#ffffff'
       }
-    });
+    }, beforeId);
 
     // Add individual markers (red)
     map.addLayer({
@@ -272,7 +333,7 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
         'circle-stroke-width': 2,
         'circle-stroke-color': '#ffffff'
       }
-    });
+    }, beforeId);
 
     // Add click handler for clusters
     map.on('click', 'clusters', (e) => {
@@ -318,13 +379,24 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
         coordinates[0] += e.lngLat.lng > coordinates[0] ? 360 : -360;
       }
 
+      // Zoom to the marker with smooth animation
+      map.flyTo({
+        center: coordinates,
+        zoom: Math.max(map.getZoom(), 18), // Zoom to at least level 18 for close-up view
+        duration: 800,
+        essential: true
+      });
+
       // Create popup HTML
       const popupHTML = createPopupHTML(props);
 
-      new mapboxgl.Popup()
-        .setLngLat(coordinates)
-        .setHTML(popupHTML)
-        .addTo(map);
+      // Add popup after a short delay to let zoom animation start
+      setTimeout(() => {
+        new mapboxgl.Popup()
+          .setLngLat(coordinates)
+          .setHTML(popupHTML)
+          .addTo(map);
+      }, 100);
     });
 
     console.log('✅ Added markers with clustering:', observations.length, 'observations');

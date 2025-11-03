@@ -81,7 +81,7 @@ npm run preview
 **3D Buildings:**
 - Hold **Ctrl/Cmd** + drag up/down to tilt the map
 - Hold **Ctrl/Cmd** + drag left/right to rotate
-- 3D buildings appear at zoom level 14+ on Streets and Dark styles
+- 3D buildings appear at zoom level 14+ on all map styles
 
 ### Map Features
 
@@ -94,10 +94,10 @@ npm run preview
 | Style | 3D Buildings | Best For |
 |-------|-------------|----------|
 | 🏙️ Streets 3D | ✅ | Urban areas, showcasing architecture |
-| 🛰️ Satellite | ❌ | Aerial imagery, terrain features |
-| 🏔️ Outdoors | ❌ | Hiking, topographic visualization |
+| 🛰️ Satellite 3D | ✅ | Aerial imagery with building heights |
+| 🏔️ Outdoors 3D | ✅ | Hiking, topographic with 3D terrain |
 | 🌙 Dark 3D | ✅ | Dark theme, urban night view |
-| ☀️ Light | ❌ | Clean, minimal appearance |
+| ☀️ Light 3D | ✅ | Clean, minimal with 3D depth |
 
 ## API Integration
 
@@ -124,8 +124,8 @@ GET https://portal.biosmart.life/api/v1/contest/109/regions/{realmId}/observatio
 
 ### 3D buildings not showing
 - Zoom to level 14+
-- Select "Streets 3D" or "Dark 3D" style
-- Hold Ctrl/Cmd and drag up to tilt the map
+- All map styles support 3D buildings
+- Hold Ctrl/Cmd and drag up to tilt the map to see 3D effect
 
 ### Clusters not working
 - Check browser console for errors
