@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import mapboxgl from 'mapbox-gl';
 import { config } from '../../config';
-import { DEFAULT_MAP_CONFIG, supports3DBuildings, BUILDING_3D_LAYER, MAP_STYLES, MAP_STYLE_INFO } from '../../utils/mapConfig';
+import { supports3DBuildings, BUILDING_3D_LAYER, MAP_STYLES, MAP_STYLE_INFO } from '../../utils/mapConfig';
 import { useMapData } from '../../hooks/useMapData';
 import { StyleSwitcherControl } from './CustomControls';
 import '../../styles/map.css';
@@ -40,6 +40,7 @@ const CATEGORY_ICONS = {
 const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.STREETS }) => {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
+  const currentPopupRef = useRef(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [styleLoaded, setStyleLoaded] = useState(false);
   const [currentStyle, setCurrentStyle] = useState(initialStyle);
@@ -57,17 +58,19 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
     // Create a map instance
     const mapInstance = new mapboxgl.Map({
       container: mapContainerRef.current,
-      ...DEFAULT_MAP_CONFIG,
       style: currentStyle,
       center: [144.97, -37.805], // Default center (Melbourne)
       zoom: 15,
+      pitch: 45, // 45-degree tilt for 3D view
+      bearing: 0,
+      antialias: true,
+      attributionControl: true,
+      logoPosition: 'bottom-left',
     });
 
     mapRef.current = mapInstance;
 
     mapInstance.once('load', () => {
-      console.log('✅ Map loaded successfully');
-
       // Add controls
       const navControl = new mapboxgl.NavigationControl({
         showCompass: true,
@@ -82,7 +85,8 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
       const styleSwitcher = new StyleSwitcherControl(
         MAP_STYLES,
         MAP_STYLE_INFO,
-        (newStyleUrl) => setCurrentStyle(newStyleUrl)
+        (newStyleUrl) => setCurrentStyle(newStyleUrl),
+        currentStyle
       );
       mapInstance.addControl(styleSwitcher, 'top-left');
 
@@ -97,12 +101,17 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
       }, 500);
     });
 
-    mapInstance.on('error', (e) => {
-      console.error('❌ Map error:', e);
+    mapInstance.on('error', () => {
+      // Log errors silently or handle them appropriately
     });
 
     // Cleanup
     return () => {
+      // Close any open popup
+      if (currentPopupRef.current) {
+        currentPopupRef.current.remove();
+        currentPopupRef.current = null;
+      }
       mapInstance.remove();
       mapRef.current = null;
     };
@@ -110,33 +119,24 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
 
   // Update map when data is loaded
   useEffect(() => {
-    console.log('📊 Data effect triggered:', {
-      hasMap: !!mapRef.current,
-      mapLoaded,
-      styleLoaded,
-      observationsCount: observations.length,
-      hasCenter: !!center,
-      hasBounds: !!bounds
-    });
-
     if (!mapRef.current) {
-      console.log('⏭️ Skipping: No map ref');
       return;
     }
 
     if (!mapLoaded || !styleLoaded) {
-      console.log('⏭️ Skipping: Map or style not loaded yet');
       return;
     }
 
     if (observations.length === 0) {
-      console.log('⏭️ Skipping: No observations yet');
       return;
     }
 
     const map = mapRef.current;
 
-    console.log('🔄 Adding markers for', observations.length, 'observations');
+    // Add boundary layer if we have bounds
+    if (bounds) {
+      addBoundaryLayer(map, bounds);
+    }
 
     // Add observation markers with clustering
     addObservationMarkers(map, observations);
@@ -147,16 +147,16 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
         padding: 50,
         maxZoom: 16,
         duration: 1000,
+        pitch: 45, // Preserve the 45-degree tilt
       });
-      console.log('✅ Map centered on realm:', center);
     } else if (center) {
       // Fallback to center
       map.flyTo({
         center: [center.lng, center.lat],
         zoom: 15,
         duration: 1000,
+        pitch: 45, // Preserve the 45-degree tilt
       });
-      console.log('✅ Map centered on point:', center);
     }
   }, [mapLoaded, styleLoaded, center, bounds, observations]);
 
@@ -179,20 +179,11 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
     const currentPitch = map.getPitch();
     const currentBearing = map.getBearing();
 
-    console.log('💾 Saving camera position:', {
-      center: currentCenter,
-      zoom: currentZoom,
-      pitch: currentPitch,
-      bearing: currentBearing
-    });
-
     // Change map style
     map.setStyle(currentStyle);
 
     // Wait for style to load
     map.once('style.load', () => {
-      console.log('✅ New style loaded, restoring camera');
-
       // Restore camera position
       map.jumpTo({
         center: currentCenter,
@@ -207,6 +198,11 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
           add3DBuildingsLayer(map);
         }
 
+        // Re-add boundary layer if we have bounds
+        if (bounds) {
+          addBoundaryLayer(map, bounds);
+        }
+
         // Re-add markers
         if (observations.length > 0) {
           addObservationMarkers(map, observations);
@@ -215,29 +211,92 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
         setStyleLoaded(true);
       }, 500);
     });
-  }, [currentStyle, mapLoaded, observations]);
+  }, [currentStyle, mapLoaded, observations, bounds]);
 
-  // Function to add 3D buildings layer
+  /**
+   * Adds a visual boundary layer to the map showing the observation area
+   * @param {mapboxgl.Map} map - The Mapbox map instance
+   * @param {Array} bounds - Array of [[minLng, minLat], [maxLng, maxLat]]
+   */
+  const addBoundaryLayer = (map, bounds) => {
+    if (!bounds || bounds.length !== 2) return;
+
+    // Remove existing boundary source and layer if they exist
+    if (map.getSource('observation-boundary')) {
+      if (map.getLayer('observation-boundary-fill')) map.removeLayer('observation-boundary-fill');
+      if (map.getLayer('observation-boundary-line')) map.removeLayer('observation-boundary-line');
+      map.removeSource('observation-boundary');
+    }
+
+    // Create a rectangle from bounds
+    const [[minLng, minLat], [maxLng, maxLat]] = bounds;
+    const boundaryGeoJSON = {
+      type: 'Feature',
+      geometry: {
+        type: 'Polygon',
+        coordinates: [[
+          [minLng, minLat], // Southwest
+          [maxLng, minLat], // Southeast
+          [maxLng, maxLat], // Northeast
+          [minLng, maxLat], // Northwest
+          [minLng, minLat]  // Close the polygon
+        ]]
+      }
+    };
+
+    // Add source
+    map.addSource('observation-boundary', {
+      type: 'geojson',
+      data: boundaryGeoJSON
+    });
+
+    // Add fill layer (semi-transparent)
+    map.addLayer({
+      id: 'observation-boundary-fill',
+      type: 'fill',
+      source: 'observation-boundary',
+      paint: {
+        'fill-color': '#3b82f6',
+        'fill-opacity': 0.05
+      }
+    }, map.getLayer('3d-buildings') ? '3d-buildings' : undefined);
+
+    // Add line layer (dashed border)
+    map.addLayer({
+      id: 'observation-boundary-line',
+      type: 'line',
+      source: 'observation-boundary',
+      paint: {
+        'line-color': '#3b82f6',
+        'line-width': 2,
+        'line-opacity': 0.6,
+        'line-dasharray': [2, 2]
+      }
+    }, map.getLayer('3d-buildings') ? '3d-buildings' : undefined);
+  };
+
+  /**
+   * Adds 3D buildings layer to the map for supported styles
+   * Skips styles that have built-in 3D buildings (e.g., Standard style)
+   * @param {mapboxgl.Map} map - The Mapbox map instance
+   */
   const add3DBuildingsLayer = (map) => {
     // Check if current style has built-in 3D buildings (e.g., Standard style)
     const styleKey = Object.keys(MAP_STYLES).find(
       key => MAP_STYLES[key] === currentStyle
     );
     if (styleKey && MAP_STYLE_INFO[styleKey]?.hasBuiltIn3D) {
-      console.log('✅ Style has built-in 3D buildings, skipping custom layer');
       return;
     }
 
     // Check if layer already exists
     if (map.getLayer('3d-buildings')) {
-      console.log('✅ 3D buildings layer already exists');
       return;
     }
 
     // Check composite source - but with a more robust check
     const source = map.getSource('composite');
     if (!source) {
-      console.warn('⚠️ Composite source not available, will retry');
       // Schedule a retry - composite may not be ready yet
       setTimeout(() => {
         if (map.getSource('composite')) {
@@ -250,13 +309,16 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
     try {
       // Add the 3D buildings layer
       map.addLayer(BUILDING_3D_LAYER);
-      console.log('✅ 3D buildings layer added successfully');
     } catch (err) {
-      console.error('❌ Error adding 3D buildings layer:', err);
+      // Handle error silently
     }
   };
 
-  // Function to load image and convert to base64
+  /**
+   * Loads an image from URL and converts it to base64 format
+   * @param {string} url - The image URL to load
+   * @returns {Promise<string>} Base64 encoded image data
+   */
   const loadImageAsBase64 = (url) => {
     return new Promise((resolve, reject) => {
       const img = new Image();
@@ -279,7 +341,13 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
     });
   };
 
-  // Function to create teardrop SVG marker with embedded image
+  /**
+   * Creates a custom teardrop-shaped SVG marker with an embedded category image
+   * @param {string} imageBase64 - Base64 encoded image data
+   * @param {string} category - Category name for unique ID generation
+   * @param {number} size - Size of the marker in pixels (default: 60)
+   * @returns {string} SVG markup as string
+   */
   const createTearDropMarkerSVG = (imageBase64, category, size = 60) => {
     // Generate unique IDs for this marker's definitions
     const uniqueId = category.toLowerCase().replace(/\s+/g, '-');
@@ -362,14 +430,14 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
             resolve();
           };
 
-          img.onerror = (error) => {
-            console.warn(`Failed to load marker for ${category}:`, error);
+          img.onerror = () => {
+            // Failed to load marker image, silently continue
             resolve();
           };
 
           img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
         } catch (error) {
-          console.warn(`Failed to process image for ${category}:`, error);
+          // Failed to process image, silently continue
           resolve();
         }
       });
@@ -408,7 +476,10 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
           creatorName: obs.creator_name || 'Unknown',
           imageUrl: obs.images?.[0]?.url || null,
           imageThumbnail: obs.images?.[0]?.url_thumbnail || null,
-          iconName: `category-${(obs.category || 'Other').toLowerCase().replace(/\s+/g, '-')}`
+          iconName: `category-${(obs.category || 'Other').toLowerCase().replace(/\s+/g, '-')}`,
+          categoryIconUrl: CATEGORY_ICONS[obs.category] || CATEGORY_ICONS['Other Life'],
+          observedAt: obs.observed_at || obs.created_at || null,
+          bioscore: obs.bioscore || null
         }
       }))
     };
@@ -422,10 +493,7 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
       clusterRadius: 50
     });
 
-    // Determine the beforeId - insert markers before 3D buildings layer
-    const beforeId = map.getLayer('3d-buildings') ? '3d-buildings' : undefined;
-
-    // Add cluster circles with gradient effect
+    // Add cluster circles with gradient effect (no beforeId - render on top)
     map.addLayer({
       id: 'clusters',
       type: 'circle',
@@ -455,7 +523,7 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
         'circle-stroke-color': '#ffffff',
         'circle-stroke-opacity': 0.8
       }
-    }, beforeId);
+    });
 
     // Add cluster count labels
     map.addLayer({
@@ -473,7 +541,7 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
         'text-halo-color': 'rgba(0, 0, 0, 0.3)',
         'text-halo-width': 1
       }
-    }, beforeId);
+    });
 
     // Add individual teardrop markers with custom category icons
     map.addLayer({
@@ -491,7 +559,7 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
       paint: {
         'icon-opacity': 1
       }
-    }, beforeId);
+    });
 
     // Add click handler for clusters
     map.on('click', 'clusters', (e) => {
@@ -506,7 +574,8 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
 
           map.easeTo({
             center: features[0].geometry.coordinates,
-            zoom: zoom
+            zoom: zoom,
+            pitch: 45 // Preserve the 45-degree tilt
           });
         }
       );
@@ -537,12 +606,19 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
         coordinates[0] += e.lngLat.lng > coordinates[0] ? 360 : -360;
       }
 
+      // Close existing popup if any
+      if (currentPopupRef.current) {
+        currentPopupRef.current.remove();
+        currentPopupRef.current = null;
+      }
+
       // Zoom to the marker with smooth animation
       map.flyTo({
         center: coordinates,
-        zoom: Math.max(map.getZoom(), 18), // Zoom to at least level 18 for close-up view
+        zoom: Math.max(map.getZoom(), 20), // Zoom to at least level 18 for close-up view
         duration: 800,
-        essential: true
+        essential: true,
+        pitch: 45 // Preserve the 45-degree tilt
       });
 
       // Create popup HTML
@@ -550,24 +626,84 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
 
       // Add popup after a short delay to let zoom animation start
       setTimeout(() => {
-        new mapboxgl.Popup()
+        const popup = new mapboxgl.Popup({
+          maxWidth: '260px',
+          closeOnClick: false,
+          className: 'custom-popup'
+        })
           .setLngLat(coordinates)
           .setHTML(popupHTML)
           .addTo(map);
+
+        // Store reference to the popup
+        currentPopupRef.current = popup;
       }, 100);
     });
+  };
 
-    console.log('✅ Added markers with clustering:', observations.length, 'observations');
+  // Helper function to get bioscore color (red to yellow to green gradient)
+  const getBioscoreColor = (score) => {
+    if (score === null || score === undefined) return '#9ca3af'; // Gray for no score
+
+    // Assuming bioscore is 0-100 scale
+    // 0-40: red to yellow
+    // 40-100: yellow to green
+    if (score < 40) {
+      // Red to yellow gradient (0-40)
+      const ratio = score / 40;
+      const red = 239; // #ef4444 red component
+      const green = Math.round(68 + (234 - 68) * ratio); // Interpolate from 68 to 234
+      return `rgb(${red}, ${green}, 68)`;
+    } else {
+      // Yellow to green gradient (40-100)
+      const ratio = (score - 40) / 60;
+      const red = Math.round(234 - (234 - 34) * ratio); // Interpolate from 234 to 34
+      const green = Math.round(179 + (197 - 179) * ratio); // Interpolate from 179 to 197
+      return `rgb(${red}, ${green}, 94)`;
+    }
+  };
+
+  // Helper function to format date
+  const formatObservedDate = (dateString) => {
+    if (!dateString) return null;
+
+    try {
+      const date = new Date(dateString);
+      const now = new Date();
+      const diffInMs = now - date;
+      const diffInDays = Math.floor(diffInMs / (1000 * 60 * 60 * 24));
+
+      // Use relative time for recent observations
+      if (diffInDays === 0) {
+        return 'Today';
+      } else if (diffInDays === 1) {
+        return 'Yesterday';
+      } else if (diffInDays < 7) {
+        return `${diffInDays} days ago`;
+      } else if (diffInDays < 30) {
+        const weeks = Math.floor(diffInDays / 7);
+        return `${weeks} ${weeks === 1 ? 'week' : 'weeks'} ago`;
+      } else {
+        // Use formatted date for older observations
+        return date.toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric'
+        });
+      }
+    } catch (error) {
+      return null;
+    }
   };
 
   // Function to create popup HTML
   const createPopupHTML = (props) => {
-    const { commonName, scientificName, category, creatorName, imageUrl, imageThumbnail } = props;
+    const { commonName, scientificName, category, creatorName, imageUrl, imageThumbnail, categoryIconUrl, observedAt, bioscore } = props;
 
     // Format the species name
     let titleHTML = '';
     if (commonName && scientificName) {
-      titleHTML = `${commonName} (<i>${scientificName}</i>)`;
+      titleHTML = `${commonName} <span style="color: #6b7280;">(<i>${scientificName}</i>)</span>`;
     } else if (commonName) {
       titleHTML = commonName;
     } else if (scientificName) {
@@ -579,10 +715,15 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
     // Build the HTML
     let html = '';
 
-    // Add image if available
+    // Add image if available, otherwise use category icon as placeholder
     if (imageThumbnail || imageUrl) {
       const imgSrc = imageThumbnail || imageUrl;
       html += `<img src="${imgSrc}" alt="${commonName || scientificName || 'Observation'}" class="popup-image" onerror="this.style.display='none'"/>`;
+    } else if (categoryIconUrl) {
+      // Use category icon as placeholder
+      html += `<div class="popup-placeholder-container">
+        <img src="${categoryIconUrl}" alt="${category}" class="popup-placeholder-image"/>
+      </div>`;
     }
 
     // Add content
@@ -591,6 +732,25 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
     if (category) {
       html += `<div class="popup-category">${category}</div>`;
     }
+
+    // Add observation time
+    const formattedDate = formatObservedDate(observedAt);
+    if (formattedDate) {
+      html += `<div class="popup-observed">Observed ${formattedDate}</div>`;
+    }
+
+    // Add bioscore with color gradient
+    if (bioscore !== null && bioscore !== undefined) {
+      const color = getBioscoreColor(bioscore);
+      html += `<div class="popup-bioscore">
+        <div class="popup-bioscore-label">Bioscore</div>
+        <div class="popup-bioscore-bar">
+          <div class="popup-bioscore-fill" style="width: ${bioscore}%; background-color: ${color};"></div>
+        </div>
+        <div class="popup-bioscore-value" style="color: ${color};">${bioscore}</div>
+      </div>`;
+    }
+
     html += `<div class="popup-spotter">Spotted by ${creatorName}</div>`;
     html += `</div>`;
 

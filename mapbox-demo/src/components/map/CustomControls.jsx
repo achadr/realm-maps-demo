@@ -5,11 +5,12 @@ import mapboxgl from 'mapbox-gl';
  * Supports multiple map styles including 3D buildings
  */
 export class StyleSwitcherControl {
-  constructor(styles, styleInfo, onStyleChange) {
+  constructor(styles, styleInfo, onStyleChange, initialStyle) {
     this.styles = styles;
     this.styleInfo = styleInfo;
     this.onStyleChange = onStyleChange;
-    this.currentStyleKey = 'STREETS';
+    // Find the current style key from the URL
+    this.currentStyleKey = Object.keys(styles).find(key => styles[key] === initialStyle) || 'STREETS';
     this.isOpen = false;
   }
 
@@ -39,12 +40,20 @@ export class StyleSwitcherControl {
 
       const option = document.createElement('button');
       option.className = 'style-option';
+      option.dataset.styleKey = styleKey;
+
+      // Add active class if this is the current style
+      if (styleKey === this.currentStyleKey) {
+        option.classList.add('style-option-active');
+      }
+
       option.innerHTML = `
         <span class="style-option-icon">${info.icon}</span>
         <div class="style-option-text">
           <div class="style-option-name">${info.name}</div>
           <div class="style-option-desc">${info.description}</div>
         </div>
+        <span class="style-option-checkmark">✓</span>
       `;
 
       option.onclick = () => {
@@ -91,6 +100,16 @@ export class StyleSwitcherControl {
   }
 
   selectStyle(styleKey) {
+    // Remove active class from all options
+    const allOptions = this.dropdown.querySelectorAll('.style-option');
+    allOptions.forEach(opt => opt.classList.remove('style-option-active'));
+
+    // Add active class to selected option
+    const selectedOption = this.dropdown.querySelector(`[data-style-key="${styleKey}"]`);
+    if (selectedOption) {
+      selectedOption.classList.add('style-option-active');
+    }
+
     this.currentStyleKey = styleKey;
     const info = this.styleInfo[styleKey];
     if (!info) return;
@@ -105,7 +124,6 @@ export class StyleSwitcherControl {
     }
 
     this.closeDropdown();
-    console.log('Style changed to:', styleKey);
   }
 
   onRemove() {
