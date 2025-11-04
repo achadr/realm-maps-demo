@@ -6,7 +6,7 @@ import { useMapData } from '../../hooks/useMapData';
 import { StyleSwitcherControl } from './CustomControls';
 import { createPopupHTML } from '../../utils/mapPopupUtils';
 import { loadCategoryIcons } from '../../utils/mapMarkerUtils';
-import { addBoundaryLayer, add3DBuildingsLayer } from '../../utils/mapLayerUtils';
+import { addBoundaryLayer, removeBoundaryLayer, add3DBuildingsLayer, stopBoundaryAnimation } from '../../utils/mapLayerUtils';
 import '../../styles/map.css';
 import '../../styles/controls.css';
 
@@ -110,6 +110,9 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
 
     // Cleanup
     return () => {
+      // Stop boundary animations before removing map
+      stopBoundaryAnimation();
+
       // Close any open popup
       if (currentPopupRef.current) {
         currentPopupRef.current.remove();
@@ -175,6 +178,10 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
 
     const map = mapRef.current;
     setStyleLoaded(false);
+
+    // Clean up boundary animations before style change
+    // (layers will be removed automatically when style changes)
+    stopBoundaryAnimation();
 
     // Save current camera position before style change
     const currentCenter = map.getCenter();
