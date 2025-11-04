@@ -1,9 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import mapboxgl from 'mapbox-gl';
 import { config } from '../../config';
-import { supports3DBuildings, BUILDING_3D_LAYER, MAP_STYLES, MAP_STYLE_INFO } from '../../utils/mapConfig';
+import { supports3DBuildings, MAP_STYLES, MAP_STYLE_INFO } from '../../utils/mapConfig';
 import { useMapData } from '../../hooks/useMapData';
 import { StyleSwitcherControl } from './CustomControls';
+import { createPopupHTML } from '../../utils/mapPopupUtils';
+import { loadCategoryIcons } from '../../utils/mapMarkerUtils';
+import { addBoundaryLayer, add3DBuildingsLayer } from '../../utils/mapLayerUtils';
 import '../../styles/map.css';
 import '../../styles/controls.css';
 
@@ -95,7 +98,7 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
       // Add 3D buildings after a small delay to ensure composite source is ready
       setTimeout(() => {
         if (supports3DBuildings(currentStyle)) {
-          add3DBuildingsLayer(mapInstance);
+          add3DBuildingsLayer(mapInstance, currentStyle);
         }
         setStyleLoaded(true);
       }, 500);
@@ -195,7 +198,7 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
       // Add 3D buildings and markers with delay to ensure composite source is ready
       setTimeout(() => {
         if (supports3DBuildings(currentStyle)) {
-          add3DBuildingsLayer(map);
+          add3DBuildingsLayer(map, currentStyle);
         }
 
         // Re-add boundary layer if we have bounds
@@ -213,239 +216,6 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
     });
   }, [currentStyle, mapLoaded, observations, bounds]);
 
-  /**
-   * Adds a visual boundary layer to the map showing the observation area
-   * @param {mapboxgl.Map} map - The Mapbox map instance
-   * @param {Array} bounds - Array of [[minLng, minLat], [maxLng, maxLat]]
-   */
-  const addBoundaryLayer = (map, bounds) => {
-    if (!bounds || bounds.length !== 2) return;
-
-    // Remove existing boundary source and layer if they exist
-    if (map.getSource('observation-boundary')) {
-      if (map.getLayer('observation-boundary-fill')) map.removeLayer('observation-boundary-fill');
-      if (map.getLayer('observation-boundary-line')) map.removeLayer('observation-boundary-line');
-      map.removeSource('observation-boundary');
-    }
-
-    // Create a rectangle from bounds
-    const [[minLng, minLat], [maxLng, maxLat]] = bounds;
-    const boundaryGeoJSON = {
-      type: 'Feature',
-      geometry: {
-        type: 'Polygon',
-        coordinates: [[
-          [minLng, minLat], // Southwest
-          [maxLng, minLat], // Southeast
-          [maxLng, maxLat], // Northeast
-          [minLng, maxLat], // Northwest
-          [minLng, minLat]  // Close the polygon
-        ]]
-      }
-    };
-
-    // Add source
-    map.addSource('observation-boundary', {
-      type: 'geojson',
-      data: boundaryGeoJSON
-    });
-
-    // Add fill layer (semi-transparent)
-    map.addLayer({
-      id: 'observation-boundary-fill',
-      type: 'fill',
-      source: 'observation-boundary',
-      paint: {
-        'fill-color': '#3b82f6',
-        'fill-opacity': 0.05
-      }
-    }, map.getLayer('3d-buildings') ? '3d-buildings' : undefined);
-
-    // Add line layer (dashed border)
-    map.addLayer({
-      id: 'observation-boundary-line',
-      type: 'line',
-      source: 'observation-boundary',
-      paint: {
-        'line-color': '#3b82f6',
-        'line-width': 2,
-        'line-opacity': 0.6,
-        'line-dasharray': [2, 2]
-      }
-    }, map.getLayer('3d-buildings') ? '3d-buildings' : undefined);
-  };
-
-  /**
-   * Adds 3D buildings layer to the map for supported styles
-   * Skips styles that have built-in 3D buildings (e.g., Standard style)
-   * @param {mapboxgl.Map} map - The Mapbox map instance
-   */
-  const add3DBuildingsLayer = (map) => {
-    // Check if current style has built-in 3D buildings (e.g., Standard style)
-    const styleKey = Object.keys(MAP_STYLES).find(
-      key => MAP_STYLES[key] === currentStyle
-    );
-    if (styleKey && MAP_STYLE_INFO[styleKey]?.hasBuiltIn3D) {
-      return;
-    }
-
-    // Check if layer already exists
-    if (map.getLayer('3d-buildings')) {
-      return;
-    }
-
-    // Check composite source - but with a more robust check
-    const source = map.getSource('composite');
-    if (!source) {
-      // Schedule a retry - composite may not be ready yet
-      setTimeout(() => {
-        if (map.getSource('composite')) {
-          add3DBuildingsLayer(map);
-        }
-      }, 100);
-      return;
-    }
-
-    try {
-      // Add the 3D buildings layer
-      map.addLayer(BUILDING_3D_LAYER);
-    } catch (err) {
-      // Handle error silently
-    }
-  };
-
-  /**
-   * Loads an image from URL and converts it to base64 format
-   * @param {string} url - The image URL to load
-   * @returns {Promise<string>} Base64 encoded image data
-   */
-  const loadImageAsBase64 = (url) => {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        canvas.width = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0);
-        try {
-          const base64 = canvas.toDataURL('image/png');
-          resolve(base64);
-        } catch (e) {
-          reject(e);
-        }
-      };
-      img.onerror = reject;
-      img.src = url;
-    });
-  };
-
-  /**
-   * Creates a custom teardrop-shaped SVG marker with an embedded category image
-   * @param {string} imageBase64 - Base64 encoded image data
-   * @param {string} category - Category name for unique ID generation
-   * @param {number} size - Size of the marker in pixels (default: 60)
-   * @returns {string} SVG markup as string
-   */
-  const createTearDropMarkerSVG = (imageBase64, category, size = 60) => {
-    // Generate unique IDs for this marker's definitions
-    const uniqueId = category.toLowerCase().replace(/\s+/g, '-');
-    return `
-      <svg width="${size}" height="${size * 1.2}" viewBox="0 0 50 60" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <filter id="shadow-${uniqueId}" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur in="SourceAlpha" stdDeviation="2"/>
-            <feOffset dx="0" dy="2" result="offsetblur"/>
-            <feComponentTransfer>
-              <feFuncA type="linear" slope="0.3"/>
-            </feComponentTransfer>
-            <feMerge>
-              <feMergeNode/>
-              <feMergeNode in="SourceGraphic"/>
-            </feMerge>
-          </filter>
-          <clipPath id="circle-clip-${uniqueId}">
-            <circle cx="25" cy="20" r="15"/>
-          </clipPath>
-          <linearGradient id="pin-gradient-${uniqueId}" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" style="stop-color:#ffffff;stop-opacity:0.3" />
-            <stop offset="100%" style="stop-color:#000000;stop-opacity:0.1" />
-          </linearGradient>
-        </defs>
-
-        <!-- Drop shadow -->
-        <ellipse cx="25" cy="56" rx="8" ry="3" fill="black" opacity="0.3"/>
-
-        <!-- Teardrop shape with gradient -->
-        <path d="M25,2 C15,2 8,9 8,19 C8,29 25,50 25,50 C25,50 42,29 42,19 C42,9 35,2 25,2 Z"
-              fill="#ef4444"
-              stroke="white"
-              stroke-width="2.5"
-              filter="url(#shadow-${uniqueId})"/>
-
-        <!-- Inner white border -->
-        <circle cx="25" cy="20" r="16" fill="white"/>
-
-        <!-- Category image clipped to circle -->
-        <image href="${imageBase64}"
-               x="10" y="5"
-               width="30" height="30"
-               clip-path="url(#circle-clip-${uniqueId})"
-               preserveAspectRatio="xMidYMid slice"/>
-
-        <!-- Glossy overlay effect -->
-        <circle cx="25" cy="20" r="15" fill="url(#pin-gradient-${uniqueId})" opacity="0.4"/>
-
-        <!-- Outer circle border -->
-        <circle cx="25" cy="20" r="15" fill="none" stroke="#e5e7eb" stroke-width="1" opacity="0.8"/>
-      </svg>
-    `;
-  };
-
-  // Function to load category images as custom teardrop markers
-  const loadCategoryIcons = async (map) => {
-    const loadPromises = Object.entries(CATEGORY_ICONS).map(([category, url]) => {
-      return new Promise(async (resolve) => {
-        const iconName = `category-${category.toLowerCase().replace(/\s+/g, '-')}`;
-
-        // Check if already loaded
-        if (map.hasImage(iconName)) {
-          resolve();
-          return;
-        }
-
-        try {
-          // Load the category image as base64
-          const imageBase64 = await loadImageAsBase64(url);
-
-          // Create teardrop marker SVG with the base64 image
-          const svg = createTearDropMarkerSVG(imageBase64, category);
-          const img = new Image(50, 60);
-
-          img.onload = () => {
-            if (!map.hasImage(iconName)) {
-              map.addImage(iconName, img, { sdf: false });
-            }
-            resolve();
-          };
-
-          img.onerror = () => {
-            // Failed to load marker image, silently continue
-            resolve();
-          };
-
-          img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
-        } catch (error) {
-          // Failed to process image, silently continue
-          resolve();
-        }
-      });
-    });
-
-    await Promise.all(loadPromises);
-  };
-
   // Function to add observation markers with clustering
   const addObservationMarkers = async (map, observations) => {
     // Remove existing source and layers if they exist
@@ -457,7 +227,7 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
     }
 
     // Load category icons first
-    await loadCategoryIcons(map);
+    await loadCategoryIcons(map, CATEGORY_ICONS);
 
     // Create GeoJSON from observations
     const geojson = {
@@ -639,122 +409,6 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
         currentPopupRef.current = popup;
       }, 100);
     });
-  };
-
-  // Helper function to get bioscore color (red to yellow to green gradient)
-  const getBioscoreColor = (score) => {
-    if (score === null || score === undefined) return '#9ca3af'; // Gray for no score
-
-    // Assuming bioscore is 0-100 scale
-    // 0-40: red to yellow
-    // 40-100: yellow to green
-    if (score < 40) {
-      // Red to yellow gradient (0-40)
-      const ratio = score / 40;
-      const red = 239; // #ef4444 red component
-      const green = Math.round(68 + (234 - 68) * ratio); // Interpolate from 68 to 234
-      return `rgb(${red}, ${green}, 68)`;
-    } else {
-      // Yellow to green gradient (40-100)
-      const ratio = (score - 40) / 60;
-      const red = Math.round(234 - (234 - 34) * ratio); // Interpolate from 234 to 34
-      const green = Math.round(179 + (197 - 179) * ratio); // Interpolate from 179 to 197
-      return `rgb(${red}, ${green}, 94)`;
-    }
-  };
-
-  // Helper function to format date
-  const formatObservedDate = (dateString) => {
-    if (!dateString) return null;
-
-    try {
-      const date = new Date(dateString);
-      const now = new Date();
-      const diffInMs = now - date;
-      const diffInDays = Math.floor(diffInMs / (1000 * 60 * 60 * 24));
-
-      // Use relative time for recent observations
-      if (diffInDays === 0) {
-        return 'Today';
-      } else if (diffInDays === 1) {
-        return 'Yesterday';
-      } else if (diffInDays < 7) {
-        return `${diffInDays} days ago`;
-      } else if (diffInDays < 30) {
-        const weeks = Math.floor(diffInDays / 7);
-        return `${weeks} ${weeks === 1 ? 'week' : 'weeks'} ago`;
-      } else {
-        // Use formatted date for older observations
-        return date.toLocaleDateString('en-US', {
-          month: 'short',
-          day: 'numeric',
-          year: 'numeric'
-        });
-      }
-    } catch (error) {
-      return null;
-    }
-  };
-
-  // Function to create popup HTML
-  const createPopupHTML = (props) => {
-    const { commonName, scientificName, category, creatorName, imageUrl, imageThumbnail, categoryIconUrl, observedAt, bioscore } = props;
-
-    // Format the species name
-    let titleHTML = '';
-    if (commonName && scientificName) {
-      titleHTML = `${commonName} <span style="color: #6b7280;">(<i>${scientificName}</i>)</span>`;
-    } else if (commonName) {
-      titleHTML = commonName;
-    } else if (scientificName) {
-      titleHTML = `<i>${scientificName}</i>`;
-    } else {
-      titleHTML = 'Unknown Species';
-    }
-
-    // Build the HTML
-    let html = '';
-
-    // Add image if available, otherwise use category icon as placeholder
-    if (imageThumbnail || imageUrl) {
-      const imgSrc = imageThumbnail || imageUrl;
-      html += `<img src="${imgSrc}" alt="${commonName || scientificName || 'Observation'}" class="popup-image" onerror="this.style.display='none'"/>`;
-    } else if (categoryIconUrl) {
-      // Use category icon as placeholder
-      html += `<div class="popup-placeholder-container">
-        <img src="${categoryIconUrl}" alt="${category}" class="popup-placeholder-image"/>
-      </div>`;
-    }
-
-    // Add content
-    html += `<div class="popup-content">`;
-    html += `<div class="popup-title">${titleHTML}</div>`;
-    if (category) {
-      html += `<div class="popup-category">${category}</div>`;
-    }
-
-    // Add observation time
-    const formattedDate = formatObservedDate(observedAt);
-    if (formattedDate) {
-      html += `<div class="popup-observed">Observed ${formattedDate}</div>`;
-    }
-
-    // Add bioscore with color gradient
-    if (bioscore !== null && bioscore !== undefined) {
-      const color = getBioscoreColor(bioscore);
-      html += `<div class="popup-bioscore">
-        <div class="popup-bioscore-label">Bioscore</div>
-        <div class="popup-bioscore-bar">
-          <div class="popup-bioscore-fill" style="width: ${bioscore}%; background-color: ${color};"></div>
-        </div>
-        <div class="popup-bioscore-value" style="color: ${color};">${bioscore}</div>
-      </div>`;
-    }
-
-    html += `<div class="popup-spotter">Spotted by ${creatorName}</div>`;
-    html += `</div>`;
-
-    return html;
   };
 
   if (error) {
