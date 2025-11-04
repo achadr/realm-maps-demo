@@ -2,7 +2,7 @@
  * Utility functions for managing map layers
  */
 
-import { supports3DBuildings, BUILDING_3D_LAYER, MAP_STYLES, MAP_STYLE_INFO } from './mapConfig';
+import { BUILDING_3D_LAYER, MAP_STYLES, MAP_STYLE_INFO } from './mapConfig';
 
 /**
  * Removes layers and their source from the map
@@ -32,7 +32,7 @@ export const removeLayersAndSource = (map, sourceId, layerIds) => {
 
 const BOUNDARY_CONFIG = {
   // Main 3D wall configuration
-  wallHeight: 80,              // Height in meters (sweet spot for 45-degree view)
+  wallHeight: 160,             // Height in meters (100% taller than original 80m)
   wallColor: '#06b6d4',        // Cyan color for modern tech feel
   wallOpacity: 0.25,           // Base opacity (25% solid)
 
@@ -120,7 +120,7 @@ const animateBoundaryLayers = (map) => {
 
   const currentTime = performance.now();
 
-  // Update wall opacity (breathing effect)
+  // Update 3D wall opacity (breathing effect)
   if (map.getLayer('observation-boundary-walls')) {
     const wallOpacity = getAnimatedValue(
       currentTime,
@@ -144,26 +144,6 @@ const animateBoundaryLayers = (map) => {
     );
     map.setPaintProperty('observation-boundary-top-edge', 'line-width', edgeWidth);
     map.setPaintProperty('observation-boundary-top-edge', 'line-opacity', edgeOpacity);
-  }
-
-  // Update corner pillars (beacon effect)
-  if (map.getLayer('observation-boundary-corners')) {
-    const pillarOpacity = getAnimatedValue(
-      currentTime,
-      BOUNDARY_CONFIG.pillarPulsePeriod,
-      BOUNDARY_CONFIG.pillarOpacityRange
-    );
-    map.setPaintProperty('observation-boundary-corners', 'fill-extrusion-opacity', pillarOpacity);
-  }
-
-  // Update inner glow (subtle ambient pulse)
-  if (map.getLayer('observation-boundary-inner-glow')) {
-    const innerGlowOpacity = getAnimatedValue(
-      currentTime,
-      BOUNDARY_CONFIG.innerGlowPulsePeriod,
-      BOUNDARY_CONFIG.innerGlowOpacityRange
-    );
-    map.setPaintProperty('observation-boundary-inner-glow', 'fill-opacity', innerGlowOpacity);
   }
 
   // Continue animation loop
@@ -199,49 +179,18 @@ export const stopBoundaryAnimation = () => {
 };
 
 /**
- * Creates corner pillar geometries for dramatic corner emphasis
- * @param {number} lng - Longitude of corner
- * @param {number} lat - Latitude of corner
- * @param {number} radius - Radius of pillar in meters (approximate)
- * @returns {Object} GeoJSON polygon for the pillar
- */
-const createCornerPillar = (lng, lat, radius) => {
-  // Convert radius from meters to approximate degrees
-  // At equator: 1 degree ≈ 111km, so radius in degrees ≈ radius_meters / 111000
-  const radiusDeg = radius / 111000;
-
-  // Create a small square around the corner point
-  return {
-    type: 'Feature',
-    geometry: {
-      type: 'Polygon',
-      coordinates: [[
-        [lng - radiusDeg, lat - radiusDeg],
-        [lng + radiusDeg, lat - radiusDeg],
-        [lng + radiusDeg, lat + radiusDeg],
-        [lng - radiusDeg, lat + radiusDeg],
-        [lng - radiusDeg, lat - radiusDeg]
-      ]]
-    }
-  };
-};
-
-/**
- * Adds a stunning 3D "Holographic Force Field" boundary visualization
+ * Adds a 3D boundary visualization with vertical walls
  *
  * VISUAL DESIGN:
- * This creates a multi-layered 3D effect that looks like a holographic
- * force field or energy barrier around the observation area:
+ * This creates 3D walls along the boundary edges without filling the interior:
  *
- * 1. Base inner glow - Subtle fill at ground level for spatial reference
- * 2. Main 3D walls - Semi-transparent extruded walls (80m high)
- * 3. Corner pillars - Taller accent posts at corners (100m high)
- * 4. Top edge glow - Bright glowing line at the top of walls
- * 5. Base foundation - Solid ground line for reference
+ * 1. 3D Walls - Vertical extruded walls (80m high) only on the edges
+ * 2. Top edge glow - Bright glowing line at the top (animated for visibility)
+ * 3. Base foundation - Solid ground line for reference
  *
- * The gradient opacity (solid at base, transparent at top) combined with
- * the 45-degree pitch creates a beautiful "force field" effect that's
- * visible but not overwhelming.
+ * The walls are created as 4 separate thin polygons (one for each edge)
+ * that get extruded vertically, creating a "box frame" effect without
+ * obscuring the interior of the bounded area.
  *
  * @param {mapboxgl.Map} map - The Mapbox map instance
  * @param {Array} bounds - Array of [[minLng, minLat], [maxLng, maxLat]]
@@ -251,9 +200,7 @@ export const addBoundaryLayer = (map, bounds) => {
 
   // Remove existing boundary layers if they exist
   const layersToRemove = [
-    'observation-boundary-inner-glow',
     'observation-boundary-walls',
-    'observation-boundary-corners',
     'observation-boundary-top-edge',
     'observation-boundary-base-line'
   ];
@@ -265,102 +212,127 @@ export const addBoundaryLayer = (map, bounds) => {
   });
 
   // Remove sources
+  if (map.getSource('observation-boundary-walls')) {
+    map.removeSource('observation-boundary-walls');
+  }
   if (map.getSource('observation-boundary')) {
     map.removeSource('observation-boundary');
   }
-  if (map.getSource('observation-boundary-corners')) {
-    map.removeSource('observation-boundary-corners');
-  }
 
-  // Create main boundary rectangle
+  // Create 4 separate line segments for each edge of the boundary
+  // This allows us to extrude each edge as a 3D wall without filling the interior
   const [[minLng, minLat], [maxLng, maxLat]] = bounds;
-  const boundaryGeoJSON = {
+
+  // Create a thin buffer polygon for each edge
+  const edgeWidth = 0.00001; // Very thin in degrees
+
+  const southWall = {
     type: 'Feature',
     geometry: {
       type: 'Polygon',
       coordinates: [[
-        [minLng, minLat], // Southwest
-        [maxLng, minLat], // Southeast
-        [maxLng, maxLat], // Northeast
-        [minLng, maxLat], // Northwest
-        [minLng, minLat]  // Close the polygon
+        [minLng, minLat - edgeWidth],
+        [maxLng, minLat - edgeWidth],
+        [maxLng, minLat + edgeWidth],
+        [minLng, minLat + edgeWidth],
+        [minLng, minLat - edgeWidth]
       ]]
     }
   };
 
-  // Create corner pillars for dramatic emphasis
-  const cornerPillars = {
+  const northWall = {
+    type: 'Feature',
+    geometry: {
+      type: 'Polygon',
+      coordinates: [[
+        [minLng, maxLat - edgeWidth],
+        [maxLng, maxLat - edgeWidth],
+        [maxLng, maxLat + edgeWidth],
+        [minLng, maxLat + edgeWidth],
+        [minLng, maxLat - edgeWidth]
+      ]]
+    }
+  };
+
+  const westWall = {
+    type: 'Feature',
+    geometry: {
+      type: 'Polygon',
+      coordinates: [[
+        [minLng - edgeWidth, minLat],
+        [minLng + edgeWidth, minLat],
+        [minLng + edgeWidth, maxLat],
+        [minLng - edgeWidth, maxLat],
+        [minLng - edgeWidth, minLat]
+      ]]
+    }
+  };
+
+  const eastWall = {
+    type: 'Feature',
+    geometry: {
+      type: 'Polygon',
+      coordinates: [[
+        [maxLng - edgeWidth, minLat],
+        [maxLng + edgeWidth, minLat],
+        [maxLng + edgeWidth, maxLat],
+        [maxLng - edgeWidth, maxLat],
+        [maxLng - edgeWidth, minLat]
+      ]]
+    }
+  };
+
+  const wallsGeoJSON = {
     type: 'FeatureCollection',
-    features: [
-      createCornerPillar(minLng, minLat, BOUNDARY_CONFIG.cornerPillarRadius), // SW
-      createCornerPillar(maxLng, minLat, BOUNDARY_CONFIG.cornerPillarRadius), // SE
-      createCornerPillar(maxLng, maxLat, BOUNDARY_CONFIG.cornerPillarRadius), // NE
-      createCornerPillar(minLng, maxLat, BOUNDARY_CONFIG.cornerPillarRadius), // NW
-    ]
+    features: [southWall, northWall, westWall, eastWall]
+  };
+
+  // Also create the outline for 2D reference lines
+  const outlineGeoJSON = {
+    type: 'Feature',
+    geometry: {
+      type: 'Polygon',
+      coordinates: [[
+        [minLng, minLat],
+        [maxLng, minLat],
+        [maxLng, maxLat],
+        [minLng, maxLat],
+        [minLng, minLat]
+      ]]
+    }
   };
 
   // Add sources
-  map.addSource('observation-boundary', {
+  map.addSource('observation-boundary-walls', {
     type: 'geojson',
-    data: boundaryGeoJSON
+    data: wallsGeoJSON
   });
 
-  map.addSource('observation-boundary-corners', {
+  map.addSource('observation-boundary', {
     type: 'geojson',
-    data: cornerPillars
+    data: outlineGeoJSON
   });
 
   // Determine where to insert layers (below 3D buildings and markers)
   const beforeLayer = map.getLayer('3d-buildings') ? '3d-buildings' : undefined;
 
-  // ===== LAYER 1: Inner Glow (Ground-level energy field) =====
-  // Subtle fill that creates depth and shows the "protected zone"
-  map.addLayer({
-    id: 'observation-boundary-inner-glow',
-    type: 'fill',
-    source: 'observation-boundary',
-    paint: {
-      'fill-color': BOUNDARY_CONFIG.innerGlowColor,
-      'fill-opacity': BOUNDARY_CONFIG.innerGlowOpacity
-    }
-  }, beforeLayer);
-
-  // ===== LAYER 2: Main 3D Walls (The primary force field effect) =====
-  // Semi-transparent extruded walls with gradient opacity
-  // The gradient makes walls solid at base and transparent at top,
-  // creating a beautiful "energy field" appearance
+  // ===== LAYER 1: 3D Walls (extruded edges only - no interior fill) =====
+  // Creates vertical 3D walls along each edge of the boundary
   map.addLayer({
     id: 'observation-boundary-walls',
     type: 'fill-extrusion',
-    source: 'observation-boundary',
+    source: 'observation-boundary-walls',
     paint: {
       'fill-extrusion-color': BOUNDARY_CONFIG.wallColor,
       'fill-extrusion-height': BOUNDARY_CONFIG.wallHeight,
       'fill-extrusion-base': 0,
       'fill-extrusion-opacity': BOUNDARY_CONFIG.wallOpacity,
-      // Gradient opacity from base to top (requires Mapbox GL JS v2+)
       'fill-extrusion-vertical-gradient': true
     }
   }, beforeLayer);
 
-  // ===== LAYER 3: Corner Pillars (Dramatic corner emphasis) =====
-  // Taller posts at corners that draw the eye and add structure
-  map.addLayer({
-    id: 'observation-boundary-corners',
-    type: 'fill-extrusion',
-    source: 'observation-boundary-corners',
-    paint: {
-      'fill-extrusion-color': BOUNDARY_CONFIG.cornerPillarColor,
-      'fill-extrusion-height': BOUNDARY_CONFIG.cornerPillarHeight,
-      'fill-extrusion-base': 0,
-      'fill-extrusion-opacity': BOUNDARY_CONFIG.cornerPillarOpacity,
-      'fill-extrusion-vertical-gradient': true
-    }
-  }, beforeLayer);
-
-  // ===== LAYER 4: Top Edge Glow (The "force field" rim) =====
-  // Bright glowing line at the top of the walls
-  // This creates the iconic "energy barrier" look
+  // ===== LAYER 2: Top Edge Glow (animated outline at top of walls) =====
+  // Bright glowing line with pulsing animation for visibility
   map.addLayer({
     id: 'observation-boundary-top-edge',
     type: 'line',
@@ -373,9 +345,8 @@ export const addBoundaryLayer = (map, bounds) => {
     }
   }, beforeLayer);
 
-  // ===== LAYER 5: Base Foundation Line (Ground reference) =====
+  // ===== LAYER 3: Base Foundation Line (ground reference) =====
   // Solid line at ground level for spatial reference
-  // Helps users understand the boundary extent
   map.addLayer({
     id: 'observation-boundary-base-line',
     type: 'line',
@@ -388,12 +359,8 @@ export const addBoundaryLayer = (map, bounds) => {
   }, beforeLayer);
 
   // ===== START ANIMATIONS =====
-  // Launch the animation loop to bring the force field to life!
-  // The animations create a "living energy field" effect with:
-  // - Pulsing walls (breathing effect)
-  // - Glowing edge (energy crackling)
-  // - Pulsing pillars (beacon effect)
-  // - Subtle inner glow (ambient energy)
+  // Launch the animation loop for the top edge glow
+  // The animation creates a pulsing effect on the outline
   // Small delay to ensure layers are fully rendered before animating
   setTimeout(() => {
     startBoundaryAnimation(map);
@@ -411,9 +378,7 @@ export const removeBoundaryLayer = (map) => {
 
   // Remove all boundary layers
   const layersToRemove = [
-    'observation-boundary-inner-glow',
     'observation-boundary-walls',
-    'observation-boundary-corners',
     'observation-boundary-top-edge',
     'observation-boundary-base-line'
   ];
@@ -425,11 +390,11 @@ export const removeBoundaryLayer = (map) => {
   });
 
   // Remove sources
+  if (map.getSource('observation-boundary-walls')) {
+    map.removeSource('observation-boundary-walls');
+  }
   if (map.getSource('observation-boundary')) {
     map.removeSource('observation-boundary');
-  }
-  if (map.getSource('observation-boundary-corners')) {
-    map.removeSource('observation-boundary-corners');
   }
 };
 
