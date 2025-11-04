@@ -93,7 +93,7 @@
 
 /* Popup Styles */
 .mapboxgl-popup {
-  pointer-events: none;
+  pointer-events: auto !important;
   z-index: 10000 !important; /* Ensure popups are always on top */
 }
 
@@ -112,8 +112,9 @@
 
 .mapboxgl-popup-tip,
 .mapboxgl-popup-close-button {
-  pointer-events: auto;
+  pointer-events: auto !important;
   z-index: 10002 !important;
+  cursor: pointer;
 }
 
 .popup-image {

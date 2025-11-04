@@ -44,6 +44,7 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const currentPopupRef = useRef(null);
+  const eventHandlersRef = useRef({}); // Store event handler references
   const [mapLoaded, setMapLoaded] = useState(false);
   const [styleLoaded, setStyleLoaded] = useState(false);
   const [currentStyle, setCurrentStyle] = useState(initialStyle);
@@ -118,6 +119,16 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
         currentPopupRef.current.remove();
         currentPopupRef.current = null;
       }
+
+      // Remove all event handlers using stored references
+      const handlers = eventHandlersRef.current;
+      if (handlers.clusterClick) mapInstance.off('click', 'clusters', handlers.clusterClick);
+      if (handlers.clusterMouseEnter) mapInstance.off('mouseenter', 'clusters', handlers.clusterMouseEnter);
+      if (handlers.clusterMouseLeave) mapInstance.off('mouseleave', 'clusters', handlers.clusterMouseLeave);
+      if (handlers.markerClick) mapInstance.off('click', 'unclustered-point', handlers.markerClick);
+      if (handlers.markerMouseEnter) mapInstance.off('mouseenter', 'unclustered-point', handlers.markerMouseEnter);
+      if (handlers.markerMouseLeave) mapInstance.off('mouseleave', 'unclustered-point', handlers.markerMouseLeave);
+
       mapInstance.remove();
       mapRef.current = null;
     };
@@ -225,6 +236,26 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
 
   // Function to add observation markers with clustering
   const addObservationMarkers = async (map, observations) => {
+    // Remove existing event handlers using stored references
+    const handlers = eventHandlersRef.current;
+    console.log('[MapSection] Removing old event handlers:', Object.keys(handlers));
+    if (handlers.clusterClick) map.off('click', 'clusters', handlers.clusterClick);
+    if (handlers.clusterMouseEnter) map.off('mouseenter', 'clusters', handlers.clusterMouseEnter);
+    if (handlers.clusterMouseLeave) map.off('mouseleave', 'clusters', handlers.clusterMouseLeave);
+    if (handlers.markerClick) map.off('click', 'unclustered-point', handlers.markerClick);
+    if (handlers.markerMouseEnter) map.off('mouseenter', 'unclustered-point', handlers.markerMouseEnter);
+    if (handlers.markerMouseLeave) map.off('mouseleave', 'unclustered-point', handlers.markerMouseLeave);
+
+    // Clear the handlers object
+    eventHandlersRef.current = {};
+    console.log('[MapSection] Event handlers cleared');
+
+    // Close any existing popup when re-adding markers
+    if (currentPopupRef.current) {
+      currentPopupRef.current.remove();
+      currentPopupRef.current = null;
+    }
+
     // Remove existing source and layers if they exist
     if (map.getSource('observations')) {
       if (map.getLayer('clusters')) map.removeLayer('clusters');
@@ -338,8 +369,8 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
       }
     });
 
-    // Add click handler for clusters
-    map.on('click', 'clusters', (e) => {
+    // Create and store event handler functions
+    const clusterClickHandler = (e) => {
       const features = map.queryRenderedFeatures(e.point, {
         layers: ['clusters']
       });
@@ -356,25 +387,41 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
           });
         }
       );
-    });
+    };
 
-    // Change cursor on hover
-    map.on('mouseenter', 'clusters', () => {
+    const clusterMouseEnterHandler = () => {
       map.getCanvas().style.cursor = 'pointer';
-    });
-    map.on('mouseleave', 'clusters', () => {
-      map.getCanvas().style.cursor = '';
-    });
+    };
 
-    map.on('mouseenter', 'unclustered-point', () => {
+    const clusterMouseLeaveHandler = () => {
+      map.getCanvas().style.cursor = '';
+    };
+
+    const markerMouseEnterHandler = () => {
       map.getCanvas().style.cursor = 'pointer';
-    });
-    map.on('mouseleave', 'unclustered-point', () => {
-      map.getCanvas().style.cursor = '';
-    });
+    };
 
-    // Add popup on marker click
-    map.on('click', 'unclustered-point', (e) => {
+    const markerMouseLeaveHandler = () => {
+      map.getCanvas().style.cursor = '';
+    };
+
+    // Store handlers in ref
+    eventHandlersRef.current.clusterClick = clusterClickHandler;
+    eventHandlersRef.current.clusterMouseEnter = clusterMouseEnterHandler;
+    eventHandlersRef.current.clusterMouseLeave = clusterMouseLeaveHandler;
+    eventHandlersRef.current.markerMouseEnter = markerMouseEnterHandler;
+    eventHandlersRef.current.markerMouseLeave = markerMouseLeaveHandler;
+
+    // Add event listeners
+    map.on('click', 'clusters', clusterClickHandler);
+    map.on('mouseenter', 'clusters', clusterMouseEnterHandler);
+    map.on('mouseleave', 'clusters', clusterMouseLeaveHandler);
+    map.on('mouseenter', 'unclustered-point', markerMouseEnterHandler);
+    map.on('mouseleave', 'unclustered-point', markerMouseLeaveHandler);
+
+    // Create marker click handler
+    const markerClickHandler = (e) => {
+      console.log('[MapSection] Marker clicked - handler executing');
       const coordinates = e.features[0].geometry.coordinates.slice();
       const props = e.features[0].properties;
 
@@ -385,6 +432,7 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
 
       // Close existing popup if any
       if (currentPopupRef.current) {
+        console.log('[MapSection] Closing existing popup');
         currentPopupRef.current.remove();
         currentPopupRef.current = null;
       }
@@ -406,6 +454,7 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
         const popup = new mapboxgl.Popup({
           maxWidth: '260px',
           closeOnClick: false,
+          closeButton: true,
           className: 'custom-popup'
         })
           .setLngLat(coordinates)
@@ -414,8 +463,21 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
 
         // Store reference to the popup
         currentPopupRef.current = popup;
+
+        // Listen for popup close event to clear reference
+        popup.on('close', () => {
+          if (currentPopupRef.current === popup) {
+            currentPopupRef.current = null;
+          }
+        });
       }, 100);
-    });
+    };
+
+    // Store and add marker click handler
+    eventHandlersRef.current.markerClick = markerClickHandler;
+    map.on('click', 'unclustered-point', markerClickHandler);
+
+    console.log('[MapSection] New event handlers registered:', Object.keys(eventHandlersRef.current));
   };
 
   if (error) {
