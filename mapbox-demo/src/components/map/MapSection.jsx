@@ -163,15 +163,18 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
       ];
     }
 
-    // Add boundary layer - use polygon if provided, otherwise use bounds
-    if (polygon) {
-      addBoundaryLayerFromPolygon(map, polygon);
-    } else if (bounds) {
-      addBoundaryLayer(map, bounds);
-    }
-
-    // Add observation markers with clustering
+    // Add observation markers with clustering first
     addObservationMarkers(map, observations);
+
+    // Add boundary layer after a small delay to ensure map is fully ready
+    // Use polygon if provided, otherwise use bounds
+    setTimeout(() => {
+      if (polygon) {
+        addBoundaryLayerFromPolygon(map, polygon);
+      } else if (bounds) {
+        addBoundaryLayer(map, bounds);
+      }
+    }, 100);
 
     // Fit map to bounds with padding - prioritize polygon bounds
     const boundsToUse = polygonBounds || bounds;
