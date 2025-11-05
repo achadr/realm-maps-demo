@@ -6,7 +6,7 @@ import { useMapData } from '../../hooks/useMapData';
 import { StyleSwitcherControl } from './CustomControls';
 import { createPopupHTML } from '../../utils/mapPopupUtils';
 import { loadCategoryIcons } from '../../utils/mapMarkerUtils';
-import { addBoundaryLayer, removeBoundaryLayer, add3DBuildingsLayer, stopBoundaryAnimation } from '../../utils/mapLayerUtils';
+import { addBoundaryLayer, addBoundaryLayerFromPolygon, removeBoundaryLayer, add3DBuildingsLayer, stopBoundaryAnimation } from '../../utils/mapLayerUtils';
 import '../../styles/map.css';
 import '../../styles/controls.css';
 
@@ -39,8 +39,9 @@ const CATEGORY_ICONS = {
  * MapSection - Embedded map component (section-based, not fullscreen)
  * @param {number} realmId - ID of the realm to display
  * @param {number} height - Height in pixels (default: 600)
+ * @param {Object} polygon - Optional polygon geometry for boundary (GeoJSON Polygon format)
  */
-const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.STREETS }) => {
+const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.STREETS, polygon = null }) => {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const currentPopupRef = useRef(null);
@@ -64,7 +65,7 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
       container: mapContainerRef.current,
       style: currentStyle,
       center: [144.97, -37.805], // Default center (Melbourne)
-      zoom: 15,
+      zoom: 10,
       pitch: 45, // 45-degree tilt for 3D view
       bearing: 0,
       antialias: true,
@@ -150,17 +151,32 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
 
     const map = mapRef.current;
 
-    // Add boundary layer if we have bounds
-    if (bounds) {
+    // Calculate bounds from polygon if provided
+    let polygonBounds = null;
+    if (polygon && polygon.coordinates && polygon.coordinates[0]) {
+      const coords = polygon.coordinates[0];
+      const lngs = coords.map(c => c[0]);
+      const lats = coords.map(c => c[1]);
+      polygonBounds = [
+        [Math.min(...lngs), Math.min(...lats)], // Southwest
+        [Math.max(...lngs), Math.max(...lats)]  // Northeast
+      ];
+    }
+
+    // Add boundary layer - use polygon if provided, otherwise use bounds
+    if (polygon) {
+      addBoundaryLayerFromPolygon(map, polygon);
+    } else if (bounds) {
       addBoundaryLayer(map, bounds);
     }
 
     // Add observation markers with clustering
     addObservationMarkers(map, observations);
 
-    // Fit map to bounds with padding (only if we have bounds)
-    if (bounds && center) {
-      map.fitBounds(bounds, {
+    // Fit map to bounds with padding - prioritize polygon bounds
+    const boundsToUse = polygonBounds || bounds;
+    if (boundsToUse) {
+      map.fitBounds(boundsToUse, {
         padding: 50,
         maxZoom: 16,
         duration: 1000,
@@ -175,7 +191,7 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
         pitch: 45, // Preserve the 45-degree tilt
       });
     }
-  }, [mapLoaded, styleLoaded, center, bounds, observations]);
+  }, [mapLoaded, styleLoaded, center, bounds, observations, polygon]);
 
   // Handle style changes
   useEffect(() => {
@@ -219,8 +235,10 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
           add3DBuildingsLayer(map, currentStyle);
         }
 
-        // Re-add boundary layer if we have bounds
-        if (bounds) {
+        // Re-add boundary layer - use polygon if provided, otherwise use bounds
+        if (polygon) {
+          addBoundaryLayerFromPolygon(map, polygon);
+        } else if (bounds) {
           addBoundaryLayer(map, bounds);
         }
 
@@ -232,7 +250,7 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
         setStyleLoaded(true);
       }, 500);
     });
-  }, [currentStyle, mapLoaded, observations, bounds]);
+  }, [currentStyle, mapLoaded, observations, bounds, polygon]);
 
   // Function to add observation markers with clustering
   const addObservationMarkers = async (map, observations) => {
@@ -293,11 +311,12 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
     };
 
     // Add source with clustering enabled
+    // Clusters visible only at zoom 10 and below
     map.addSource('observations', {
       type: 'geojson',
       data: geojson,
       cluster: true,
-      clusterMaxZoom: 14,
+      clusterMaxZoom: 10, // Stop clustering above zoom 10
       clusterRadius: 50
     });
 
@@ -360,7 +379,8 @@ const MapSection = ({ realmId = 12436, height = 600, initialStyle = MAP_STYLES.S
       layout: {
         'icon-image': ['get', 'iconName'],
         'icon-size': 0.8,
-        'icon-allow-overlap': false,
+        'icon-allow-overlap': true, // Allow markers to overlap so all are visible
+        'icon-ignore-placement': true, // Don't hide markers due to placement collisions
         'icon-anchor': 'bottom',
         'icon-offset': [0, -5]
       },

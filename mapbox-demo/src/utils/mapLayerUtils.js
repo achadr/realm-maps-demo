@@ -399,6 +399,167 @@ export const removeBoundaryLayer = (map) => {
 };
 
 /**
+ * Add boundary layer from polygon geometry (actual polygon shape, not bounds)
+ * Creates 3D walls that follow the exact polygon boundary
+ * @param {mapboxgl.Map} map - Mapbox map instance
+ * @param {Object} polygon - Polygon geometry from API (GeoJSON Polygon format)
+ */
+export const addBoundaryLayerFromPolygon = (map, polygon) => {
+  // Validate polygon
+  if (!polygon || !polygon.coordinates || polygon.coordinates.length === 0) {
+    console.warn('Invalid polygon provided to addBoundaryLayerFromPolygon');
+    return;
+  }
+
+  // Remove existing boundary layers if they exist
+  const layersToRemove = [
+    'observation-boundary-walls',
+    'observation-boundary-top-edge',
+    'observation-boundary-base-line'
+  ];
+
+  layersToRemove.forEach(layerId => {
+    if (map.getLayer(layerId)) {
+      map.removeLayer(layerId);
+    }
+  });
+
+  // Remove sources
+  if (map.getSource('observation-boundary-walls')) {
+    map.removeSource('observation-boundary-walls');
+  }
+  if (map.getSource('observation-boundary')) {
+    map.removeSource('observation-boundary');
+  }
+
+  // Extract coordinates from first ring (outer boundary)
+  let coords = polygon.coordinates[0];
+
+  if (!coords || coords.length === 0) {
+    console.warn('Polygon has no coordinates in first ring');
+    return;
+  }
+
+  // Ensure the polygon is closed (first point === last point)
+  const firstPoint = coords[0];
+  const lastPoint = coords[coords.length - 1];
+  const isClosed = firstPoint[0] === lastPoint[0] && firstPoint[1] === lastPoint[1];
+
+  if (!isClosed) {
+    console.log('🔄 Closing polygon by adding first point at the end');
+    coords = [...coords, firstPoint];
+  }
+
+  console.log('📐 Creating 3D boundary from polygon with', coords.length, 'points');
+
+  // Create the polygon outline for reference lines
+  const outlineGeoJSON = {
+    type: 'Feature',
+    geometry: {
+      type: 'Polygon',
+      coordinates: [coords]
+    }
+  };
+
+  // Create thin wall segments along each edge of the polygon
+  const edgeWidth = 0.0001; // Wall thickness in degrees (increased 10x for visibility)
+  const wallFeatures = [];
+
+  // For each edge of the polygon, create a thin rectangular wall
+  for (let i = 0; i < coords.length - 1; i++) {
+    const [lng1, lat1] = coords[i];
+    const [lng2, lat2] = coords[i + 1];
+
+    // Calculate perpendicular offset for wall thickness
+    const dx = lng2 - lng1;
+    const dy = lat2 - lat1;
+    const length = Math.sqrt(dx * dx + dy * dy);
+    const perpX = (-dy / length) * edgeWidth;
+    const perpY = (dx / length) * edgeWidth;
+
+    // Create a thin rectangular polygon for this edge
+    const wallSegment = {
+      type: 'Feature',
+      geometry: {
+        type: 'Polygon',
+        coordinates: [[
+          [lng1 - perpX, lat1 - perpY],
+          [lng2 - perpX, lat2 - perpY],
+          [lng2 + perpX, lat2 + perpY],
+          [lng1 + perpX, lat1 + perpY],
+          [lng1 - perpX, lat1 - perpY]
+        ]]
+      }
+    };
+
+    wallFeatures.push(wallSegment);
+  }
+
+  const wallsGeoJSON = {
+    type: 'FeatureCollection',
+    features: wallFeatures
+  };
+
+  // Add sources
+  map.addSource('observation-boundary-walls', {
+    type: 'geojson',
+    data: wallsGeoJSON
+  });
+
+  map.addSource('observation-boundary', {
+    type: 'geojson',
+    data: outlineGeoJSON
+  });
+
+  // Determine where to insert layers (below 3D buildings and markers)
+  const beforeLayer = map.getLayer('3d-buildings') ? '3d-buildings' : undefined;
+
+  // Add 3D Walls (extruded edges following polygon shape)
+  map.addLayer({
+    id: 'observation-boundary-walls',
+    type: 'fill-extrusion',
+    source: 'observation-boundary-walls',
+    paint: {
+      'fill-extrusion-color': BOUNDARY_CONFIG.wallColor,
+      'fill-extrusion-height': BOUNDARY_CONFIG.wallHeight,
+      'fill-extrusion-base': 0,
+      'fill-extrusion-opacity': BOUNDARY_CONFIG.wallOpacity,
+      'fill-extrusion-vertical-gradient': true
+    }
+  }, beforeLayer);
+
+  // Add Top Edge Glow (animated outline at top of walls)
+  map.addLayer({
+    id: 'observation-boundary-top-edge',
+    type: 'line',
+    source: 'observation-boundary',
+    paint: {
+      'line-color': BOUNDARY_CONFIG.topEdgeColor,
+      'line-width': BOUNDARY_CONFIG.topEdgeWidth,
+      'line-opacity': BOUNDARY_CONFIG.topEdgeOpacity,
+      'line-blur': 2
+    }
+  }, beforeLayer);
+
+  // Add Base Foundation Line (ground reference)
+  map.addLayer({
+    id: 'observation-boundary-base-line',
+    type: 'line',
+    source: 'observation-boundary',
+    paint: {
+      'line-color': BOUNDARY_CONFIG.baseLineColor,
+      'line-width': BOUNDARY_CONFIG.baseLineWidth,
+      'line-opacity': BOUNDARY_CONFIG.baseLineOpacity
+    }
+  }, beforeLayer);
+
+  // Start animations
+  setTimeout(() => {
+    startBoundaryAnimation(map);
+  }, 100);
+};
+
+/**
  * Adds 3D buildings layer to the map for supported styles
  * Skips styles that have built-in 3D buildings (e.g., Standard style)
  * @param {mapboxgl.Map} map - The Mapbox map instance
